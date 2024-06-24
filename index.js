@@ -2,6 +2,7 @@ import { chat, chat_metadata, saveChatDebounced, saveSettingsDebounced } from '.
 import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '../../../slash-commands/SlashCommandArgument.js';
+import { SlashCommandClosure } from '../../../slash-commands/SlashCommandClosure.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { delay } from '../../../utils.js';
 
@@ -17,13 +18,13 @@ const settings = Object.assign(new Settings(), extension_settings.messageVariabl
 extension_settings.messageVariables = settings;
 
 SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'setmesvar',
-    callback: (args, value)=>{
+    callback: async(args, value)=>{
         const name = /**@type{string}*/(args.key) ?? null;
         if (name == null) {
             throw new Error('/setmesvar requires key');
         }
         const mesId = /**@type {number}*/(args.mes ?? chat.findLastIndex(it=>!it.is_system));
-        setMessageVar(mesId, args.key, value, args.index);
+        await setMessageVar(mesId, args.filter, args.key, value, args.index);
         return value;
     },
     namedArgumentList: [
@@ -41,6 +42,10 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'setmesvar',
             typeList: [ARGUMENT_TYPE.NUMBER],
             defaultValue: 'last not-hidden message',
         }),
+        SlashCommandNamedArgument.fromProps({ name: 'filter',
+            description: 'closure to filter the chat history with, must return true or false',
+            typeList: [ARGUMENT_TYPE.CLOSURE],
+        }),
     ],
     unnamedArgumentList: [
         SlashCommandArgument.fromProps({ description: 'value',
@@ -52,13 +57,13 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'setmesvar',
 }));
 
 SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'getmesvar',
-    callback: (args, value)=>{
+    callback: async(args, value)=>{
         const name = /**@type{string}*/(args.key ?? value) ?? null;
         if (name == null) {
             throw new Error('/setmesvar requires key');
         }
         const mesId = /**@type {number}*/(args.mes ?? chat.findLastIndex(it=>!it.is_system));
-        const vars = getMessageVars(mesId);
+        const vars = await getMessageVars(mesId, args.filter);
         let variable = vars?.[name];
         if (args.index !== undefined) {
             try {
@@ -92,6 +97,10 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'getmesvar',
             typeList: [ARGUMENT_TYPE.NUMBER],
             defaultValue: 'last not-hidden message',
         }),
+        SlashCommandNamedArgument.fromProps({ name: 'filter',
+            description: 'closure to filter the chat history with, must return true or false',
+            typeList: [ARGUMENT_TYPE.CLOSURE],
+        }),
     ],
     unnamedArgumentList: [
         new SlashCommandArgument(
@@ -102,9 +111,9 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'getmesvar',
 }));
 
 SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'getmesvars',
-    callback: (args, value)=>{
+    callback: async(args, value)=>{
         const mesId = /**@type {number}*/(args.mes ?? (value == '' ? chat.findLastIndex(it=>!it.is_system) : value));
-        const vars = getMessageVars(mesId);
+        const vars = await getMessageVars(mesId, args.filter);
         return JSON.stringify(vars ?? {});
     },
     namedArgumentList: [
@@ -112,6 +121,10 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'getmesvars',
             description: 'message id, negative numbers start at {{lastMessageId}}',
             typeList: [ARGUMENT_TYPE.NUMBER],
             defaultValue: 'last not-hidden message',
+        }),
+        SlashCommandNamedArgument.fromProps({ name: 'filter',
+            description: 'closure to filter the chat history with, must return true or false',
+            typeList: [ARGUMENT_TYPE.CLOSURE],
         }),
     ],
     unnamedArgumentList: [
@@ -126,16 +139,38 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'getmesvars',
 
 
 
-const getMessageVars = (mesId)=>{
-    const mes = chat.slice(mesId)[0];
+/**
+ * @param {number} mesId
+ * @param {SlashCommandClosure} filter
+ */
+const getMessage = async(mesId, filter)=>{
+    const mesList = [];
+    if (filter) {
+        const ogScope = filter.scope.getCopy();
+        for (const mes of chat) {
+            filter.scope = ogScope.getCopy();
+            for (const key of Object.keys(mes)) {
+                filter.scope.setMacro(key, mes[key]);
+            }
+            if ((await filter.execute()).pipe) {
+                mesList.push(mes);
+            }
+        }
+    } else {
+        mesList.push(...chat);
+    }
+    return mesList.slice(mesId)[0];
+};
+const getMessageVars = async(mesId, filter)=>{
+    const mes = await getMessage(mesId, filter);
     if (!mes) {
         throw new Error(`message ${mesId} does not exist`);
     }
     const swipeId = mes.swipe_id ?? 0;
     return (mes.variables ?? [])[swipeId];
 };
-const setMessageVar = (mesId, key, val, index = null)=>{
-    const mes = chat.slice(mesId)[0];
+const setMessageVar = async(mesId, filter, key, val, index = null)=>{
+    const mes = await getMessage(mesId, filter);
     if (!mes) {
         throw new Error(`message ${mesId} does not exist`);
     }
