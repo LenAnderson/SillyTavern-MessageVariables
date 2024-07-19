@@ -136,6 +136,51 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'getmesvars',
     helpString: 'Get a dictionary with all the message bound variables.',
 }));
 
+SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'flushmesvar',
+    callback: async(args, value)=>{
+        const name = /**@type{string}*/(args.key ?? value) ?? null;
+        if (name == null) {
+            throw new Error('/setmesvar requires key');
+        }
+        const mesId = /**@type {number}*/(args.mes ?? chat.findLastIndex(it=>!it.is_system));
+        await flushMessageVar(mesId, args.filter, name);
+        return '';
+    },
+    returns: 'message bound variable value',
+    namedArgumentList: [
+        new SlashCommandNamedArgument(
+            'key', 'variable name', [ARGUMENT_TYPE.VARIABLE_NAME], false,
+        ),
+        SlashCommandNamedArgument.fromProps({ name: 'mes',
+            description: 'message id, negative numbers start at {{lastMessageId}}',
+            typeList: [ARGUMENT_TYPE.NUMBER],
+            defaultValue: 'last not-hidden message',
+        }),
+        SlashCommandNamedArgument.fromProps({ name: 'filter',
+            description: 'closure to filter the chat history with, must return true or false',
+            typeList: [ARGUMENT_TYPE.CLOSURE],
+        }),
+    ],
+    unnamedArgumentList: [
+        new SlashCommandArgument(
+            'variable name', [ARGUMENT_TYPE.VARIABLE_NAME], false,
+        ),
+    ],
+    helpString: `
+            <div>
+                Delete a message variable.
+            </div>
+            <div>
+                <strong>Example:</strong>
+                <ul>
+                    <li>
+                        <pre><code class="language-stscript">/flushmesvar score</code></pre>
+                    </li>
+                </ul>
+            </div>
+        `,
+}))
+
 
 
 
@@ -203,8 +248,28 @@ const setMessageVar = async(mesId, filter, key, val, index = null)=>{
         if (!chat_metadata.variables) chat_metadata.variables = {};
         chat_metadata.variables[key] = mes.variables[swipeId][key];
         saveMetadataDebounced();
-        saveChatDebounced();
     }
+    saveChatDebounced();
+};
+const flushMessageVar = async(mesId, filter, key)=>{
+    const mes = await getMessage(mesId, filter);
+    if (!mes) {
+        throw new Error(`message ${mesId} does not exist`);
+    }
+    const swipeId = mes.swipe_id ?? 0;
+    if (!mes.variables) {
+        return;
+    }
+    if (!mes.variables[swipeId]) {
+        return;
+    }
+    delete mes.variables[swipeId][key];
+    if (settings.updateChatVars && mes == chat.findLast(it=>!it.is_system)) {
+        if (!chat_metadata.variables) chat_metadata.variables = {};
+        chat_metadata.variables[key] = mes.variables[swipeId][key];
+        saveMetadataDebounced();
+    }
+    saveChatDebounced();
 };
 
 
